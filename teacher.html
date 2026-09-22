@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>교사용 열람</title>
+<link rel="stylesheet" href="style.css">
+<style>
+  .wrap { max-width: 1100px; }
+  .bar { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; }
+  .bar > div { flex: 1 1 160px; min-width: 0; }
+  .bar button { flex: none; }
+  .summary { margin: 14px 0; color: var(--muted); font-size: 14px; }
+  .stu { background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 12px; }
+  .stu > summary { cursor: pointer; padding: 12px 16px; display: flex; gap: 12px; flex-wrap: wrap; align-items: baseline; }
+  .stu > summary b { font-size: 16px; }
+  .stu > summary .meta { color: var(--muted); font-size: 13px; }
+  .stu > summary .topic { flex: 1 1 260px; min-width: 0; }
+  .stu .body { padding: 0 16px 14px; }
+  .fld { border-top: 1px solid var(--line); padding: 10px 0; }
+  .fld .k { font-size: 13px; font-weight: 700; color: var(--accent); margin-bottom: 2px; display: flex; justify-content: space-between; gap: 8px; }
+  .fld .k span { font-weight: 400; color: var(--muted); }
+  .fld .v { white-space: pre-wrap; word-break: break-word; }
+  .fld .v a { color: var(--accent); word-break: break-all; }
+  .empty { color: var(--warn); }
+  .small { font-size: 13px; padding: 7px 12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top"><span>역탐현 수행평가 · 교사용 열람</span><a href="index.html" style="color:#fff">학생용 첫 화면</a></header>
+  <div class="title-block">
+    <div class="bar">
+      <div>
+        <label class="f" for="key">교사 비밀번호</label>
+        <input type="password" id="key">
+      </div>
+      <div>
+        <label class="f" for="task">수행평가</label>
+        <select id="task"><option>수행1</option><option>수행2</option><option>수행3</option><option>수행4</option></select>
+      </div>
+      <button id="load">불러오기</button>
+    </div>
+    <div class="bar" style="margin-top:6px">
+      <div>
+        <label class="f" for="cls">반</label>
+        <select id="cls"><option value="">전체</option></select>
+      </div>
+      <div style="flex:3 1 240px">
+        <label class="f" for="q">검색 (학번·이름·내용)</label>
+        <input type="text" id="q">
+      </div>
+      <button class="ghost" id="csv">CSV 내려받기</button>
+      <button class="ghost" id="toggle">모두 펼치기</button>
+    </div>
+    <div id="msg" class="status"></div>
+  </div>
+
+  <div class="summary" id="summary"></div>
+  <div id="list"></div>
+</div>
+
+<script src="config.js"></script>
+<script>
+(function () {
+  const CFG = window.APP_CONFIG || {};
+  const $ = id => document.getElementById(id);
+  const HIDE = ["학번", "이름", "반", "번호"];
+  let headers = [], rows = [], openAll = false;
+
+  try { $("key").value = sessionStorage.getItem("yth-key") || ""; } catch (e) {}
+
+  function msg(t, k) { $("msg").textContent = t; $("msg").className = "status" + (k ? " " + k : ""); }
+  function esc(s) { return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c])); }
+  function linkify(s) {
+    return esc(s).replace(/https?:\/\/[^\s<]+/g, u => '<a href="' + u + '" target="_blank" rel="noopener">' + u + "</a>");
+  }
+  function len(s) { return String(s).replace(/\s/g, "").length; }
+
+  async function load() {
+    if (!CFG.SCRIPT_URL) return msg("config.js에 SCRIPT_URL이 비어 있습니다.", "err");
+    const key = $("key").value.trim();
+    if (!key) return msg("비밀번호를 입력하세요.", "err");
+    try { sessionStorage.setItem("yth-key", key); } catch (e) {}
+    msg("불러오는 중…");
+    try {
+      const res = await fetch(CFG.SCRIPT_URL, {
+        method: "POST",
+        headers: { "Content-Type": "text/plain;charset=utf-8" },
+        body: JSON.stringify({ action: "list", key, task: $("task").value })
+      });
+      const out = await res.json();
+      if (!out.ok) throw new Error(out.error);
+      headers = out.headers; rows = out.rows;
+      rows.sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+      const ci = headers.indexOf("반");
+      const classes = [...new Set(rows.map(r => r[ci]))].filter(Boolean).sort((a, b) => a - b);
+      $("cls").innerHTML = '<option value="">전체</option>' + classes.map(c => '<option value="' + esc(c) + '">' + esc(c) + "반</option>").join("");
+      msg("불러옴 · " + new Date().toLocaleTimeString("ko-KR"), "ok");
+      render();
+    } catch (e) { msg("오류: " + e.message, "err"); }
+  }
+
+  function filtered() {
+    const c = $("cls").value, q = $("q").value.trim().toLowerCase();
+    const ci = headers.indexOf("반");
+    return rows.filter(r => (!c || String(r[ci]) === c) && (!q || r.join(" ").toLowerCase().includes(q)));
+  }
+
+  function render() {
+    const list = filtered();
+    const H = h => headers.indexOf(h);
+    $("summary").textContent = "제출 " + rows.length + "명 · 표시 " + list.length + "명";
+    $("list").innerHTML = list.map(r => {
+      const fields = headers.map((h, i) => [h, r[i]]).filter(([h]) => !HIDE.includes(h));
+      return '<details class="stu"' + (openAll ? " open" : "") + '><summary>' +
+        "<b>" + esc(r[H("학번")]) + " " + esc(r[H("이름")]) + "</b>" +
+        '<span class="topic">' + esc(r[H("내 주제")] || "") + "</span>" +
+        '<span class="meta">최종 ' + esc(r[H("최종 제출")]) + " · " + esc(r[H("제출 횟수")]) + "회</span>" +
+        '<button type="button" class="ghost small" data-copy="' + esc(r[H("학번")]) + '">본문 복사</button>' +
+        '</summary><div class="body">' +
+        fields.map(([h, v]) => '<div class="fld"><div class="k">' + esc(h) +
+          (v && /^칸|^질문|^내 /.test(h) ? "<span>" + len(v) + "자</span>" : "") + '</div><div class="v">' +
+          (v ? linkify(v) : '<span class="empty">(비어 있음)</span>') + "</div></div>").join("") +
+        "</div></details>";
+    }).join("");
+  }
+
+  function textOf(sid) {
+    const r = rows.find(x => String(x[0]) === sid);
+    if (!r) return "";
+    return headers.map((h, i) => "■ " + h + "\n" + (r[i] || "")).join("\n\n");
+  }
+
+  $("list").addEventListener("click", e => {
+    const b = e.target.closest("[data-copy]");
+    if (!b) return;
+    e.preventDefault();
+    navigator.clipboard.writeText(textOf(b.dataset.copy)).then(() => { b.textContent = "복사됨"; setTimeout(() => b.textContent = "본문 복사", 1200); });
+  });
+
+  $("csv").addEventListener("click", () => {
+    if (!headers.length) return msg("먼저 불러오세요.", "err");
+    const q = v => '"' + String(v).replace(/"/g, '""') + '"';
+    const csv = "﻿" + [headers].concat(filtered()).map(r => r.map(q).join(",")).join("\r\n");
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+    a.download = $("task").value + "_제출_" + new Date().toISOString().slice(0, 10) + ".csv";
+    a.click();
+  });
+
+  $("toggle").addEventListener("click", () => {
+    openAll = !openAll;
+    $("toggle").textContent = openAll ? "모두 접기" : "모두 펼치기";
+    render();
+  });
+  $("load").addEventListener("click", load);
+  $("key").addEventListener("keydown", e => { if (e.key === "Enter") load(); });
+  $("cls").addEventListener("change", render);
+  $("q").addEventListener("input", render);
+})();
+</script>
+</body>
+</html>
